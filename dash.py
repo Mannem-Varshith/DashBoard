@@ -165,16 +165,121 @@ def load_data(uploaded_file):
     try:
         file_extension = uploaded_file.name.split('.')[-1].lower()
         
+        # Check if file is empty
+        if uploaded_file.size == 0:
+            st.error("❌ The uploaded file is empty. Please upload a file with data.")
+            return None
+        
+        # Reset file pointer to beginning
+        uploaded_file.seek(0)
+        
         if file_extension == 'csv':
-            df = pd.read_csv(uploaded_file)
+            # Try different CSV parsing options
+            df = None
+            parsing_attempts = [
+                {'method': 'default', 'params': {}},
+                {'method': 'auto-separator', 'params': {'sep': None, 'engine': 'python'}},
+                {'method': 'comma-separated', 'params': {'sep': ','}},
+                {'method': 'semicolon-separated', 'params': {'sep': ';'}},
+                {'method': 'tab-separated', 'params': {'sep': '\t'}},
+                {'method': 'pipe-separated', 'params': {'sep': '|'}}
+            ]
+            
+            for attempt in parsing_attempts:
+                try:
+                    uploaded_file.seek(0)  # Reset file pointer
+                    df = pd.read_csv(uploaded_file, **attempt['params'])
+                    
+                    # Check if we got data
+                    if not df.empty and len(df.columns) > 0:
+                        st.success(f"✅ Successfully loaded CSV using {attempt['method']} method")
+                        break
+                    else:
+                        df = None
+                        
+                except pd.errors.EmptyDataError:
+                    st.error("❌ The CSV file appears to be empty or has no data rows.")
+                    return None
+                except pd.errors.ParserError as e:
+                    if "No columns to parse from file" in str(e):
+                        continue  # Try next method
+                    else:
+                        continue  # Try next method
+                except Exception as e:
+                    continue  # Try next method
+            
+            if df is None or df.empty:
+                st.error("❌ Unable to parse CSV file with any method. Please check the file format.")
+                return None
+                
         elif file_extension in ['xlsx', 'xls']:
-            df = pd.read_excel(uploaded_file)
+            try:
+                df = pd.read_excel(uploaded_file)
+            except Exception as e:
+                if "No columns to parse from file" in str(e):
+                    st.error("❌ The Excel file has no valid columns. Please check if the file has data.")
+                    return None
+                else:
+                    st.error(f"❌ Error reading Excel file: {str(e)}")
+                    return None
         elif file_extension == 'txt':
-            df = pd.read_csv(uploaded_file, sep='\t')
+            # Try different text file parsing options
+            df = None
+            parsing_attempts = [
+                {'method': 'tab-separated', 'params': {'sep': '\t'}},
+                {'method': 'comma-separated', 'params': {'sep': ','}},
+                {'method': 'auto-separator', 'params': {'sep': None, 'engine': 'python'}}
+            ]
+            
+            for attempt in parsing_attempts:
+                try:
+                    uploaded_file.seek(0)  # Reset file pointer
+                    df = pd.read_csv(uploaded_file, **attempt['params'])
+                    
+                    # Check if we got data
+                    if not df.empty and len(df.columns) > 0:
+                        st.success(f"✅ Successfully loaded TXT using {attempt['method']} method")
+                        break
+                    else:
+                        df = None
+                        
+                except pd.errors.EmptyDataError:
+                    st.error("❌ The text file appears to be empty or has no data rows.")
+                    return None
+                except pd.errors.ParserError as e:
+                    if "No columns to parse from file" in str(e):
+                        continue  # Try next method
+                    else:
+                        continue  # Try next method
+                except Exception as e:
+                    continue  # Try next method
+            
+            if df is None or df.empty:
+                st.error("❌ Unable to parse text file with any method. Please check the file format.")
+                return None
         else:
             st.error(f"❌ Unsupported file format: {file_extension}")
             return None
-            
+        
+        # Check if DataFrame is empty
+        if df.empty:
+            st.error("❌ The file contains no data rows.")
+            return None
+        
+        # Check if DataFrame has columns
+        if len(df.columns) == 0:
+            st.error("❌ The file has no columns. Please check the file format.")
+            return None
+        
+        # Display file info for debugging
+        st.info(f"""
+        📊 **File Analysis:**
+        - Rows: {len(df):,}
+        - Columns: {len(df.columns)}
+        - Column names: {', '.join(df.columns[:5])}{'...' if len(df.columns) > 5 else ''}
+        - Memory usage: {df.memory_usage(deep=True).sum() / 1024:.1f} KB
+        """)
+        
         return df
     except Exception as e:
         st.error(f"❌ Error loading file: {str(e)}")
@@ -190,7 +295,7 @@ def detect_date_columns(df):
                 if len(sample_data) > 0:
                     pd.to_datetime(sample_data, errors='raise', infer_datetime_format=True)
                     date_columns.append(col)
-            except:
+            except (ValueError, TypeError):
                 continue
     return date_columns
 
@@ -466,6 +571,8 @@ def create_multi_category_visualization(df, columns):
     
     plt.tight_layout()
     return fig
+
+def create_time_series_chart(df, date_col, numeric_col):
     """Create time series chart for date columns"""
     try:
         df_copy = df.copy()
@@ -490,7 +597,7 @@ def create_multi_category_visualization(df, columns):
         plt.tight_layout()
         
         return fig
-    except:
+    except Exception as e:
         return None
 
 def main():
@@ -514,6 +621,114 @@ def main():
             type=['csv', 'xlsx', 'xls', 'txt'],
             help="Supported: CSV, Excel, Tab-delimited TXT"
         )
+        
+        # File validation and info
+        if uploaded_file is not None:
+            file_size = uploaded_file.size
+            file_name = uploaded_file.name
+            file_extension = file_name.split('.')[-1].lower()
+            
+            st.info(f"""
+            📄 **File Info:**
+            - Name: {file_name}
+            - Size: {file_size:,} bytes ({file_size/1024:.1f} KB)
+            - Type: {file_extension.upper()}
+            """)
+            
+            if file_size == 0:
+                st.error("⚠️ The uploaded file is empty. Please upload a file with data.")
+            elif file_size < 100:
+                st.warning("⚠️ File seems very small. Make sure it contains data.")
+            
+            # File content preview for debugging
+            if st.checkbox("🔍 Show file content preview", help="Preview the first few lines of your file to debug loading issues"):
+                try:
+                    uploaded_file.seek(0)
+                    content = uploaded_file.read().decode('utf-8', errors='ignore')
+                    lines = content.split('\n')[:10]  # First 10 lines
+                    
+                    st.markdown("**📄 File Content Preview (first 10 lines):**")
+                    st.code('\n'.join(lines), language='text')
+                    
+                    # Show file structure analysis
+                    if len(lines) > 0:
+                        first_line = lines[0].strip()
+                        if first_line:
+                            # Try to detect separator
+                            separators = [',', ';', '\t', '|', ' ']
+                            detected_sep = None
+                            for sep in separators:
+                                if sep in first_line:
+                                    detected_sep = sep
+                                    break
+                            
+                            if detected_sep:
+                                st.info(f"🔍 Detected separator: '{detected_sep}' (character code: {ord(detected_sep)})")
+                            else:
+                                st.warning("⚠️ No common separator detected. This might cause parsing issues.")
+                        
+                        # Count non-empty lines
+                        non_empty_lines = [line for line in lines if line.strip()]
+                        st.info(f"📊 Found {len(non_empty_lines)} non-empty lines in preview")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error reading file content: {str(e)}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Troubleshooting Guide
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.markdown("**🔧 Troubleshooting**")
+        if st.expander("❓ Common File Loading Issues", expanded=False):
+            st.markdown("""
+            **Common Issues & Solutions:**
+            
+            🔴 **"Empty file" error:**
+            - Make sure your file contains data
+            - Check file size > 0 bytes
+            
+            🔴 **"No columns to parse" error:**
+            - Ensure file has headers (column names)
+            - Check for proper separators (comma, tab, semicolon)
+            - Remove empty rows at the beginning
+            
+            🔴 **"Unable to parse" error:**
+            - Try different file formats (CSV, Excel)
+            - Check for special characters or encoding issues
+            - Use the file preview feature above
+            
+            🔴 **File not loading:**
+            - Supported formats: CSV, XLSX, XLS, TXT
+            - Maximum file size: 200MB
+            - Try the sample data button for testing
+            """)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Sample Data Option
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.markdown("**🧪 Sample Data**")
+        if st.button("📊 Load Sample Data", help="Load sample agricultural data for testing"):
+            # Create sample agricultural data
+            np.random.seed(42)
+            n_samples = 1000
+            
+            sample_data = {
+                'Date': pd.date_range('2023-01-01', periods=n_samples, freq='D'),
+                'Crop_Type': np.random.choice(['Wheat', 'Corn', 'Soybeans', 'Rice', 'Cotton'], n_samples),
+                'Region': np.random.choice(['North', 'South', 'East', 'West', 'Central'], n_samples),
+                'Yield_kg': np.random.normal(2500, 500, n_samples),
+                'Rainfall_mm': np.random.normal(120, 30, n_samples),
+                'Temperature_C': np.random.normal(22, 8, n_samples),
+                'Fertilizer_kg': np.random.normal(150, 25, n_samples),
+                'Pest_Infestation': np.random.choice(['Low', 'Medium', 'High'], n_samples),
+                'Soil_Quality': np.random.choice(['Poor', 'Fair', 'Good', 'Excellent'], n_samples),
+                'Harvest_Date': pd.date_range('2023-06-01', periods=n_samples, freq='D')
+            }
+            
+            df_sample = pd.DataFrame(sample_data)
+            st.session_state['sample_data'] = df_sample
+            st.success("✅ Sample data loaded! You can now explore the dashboard.")
+        
         st.markdown('</div>', unsafe_allow_html=True)
         
         if uploaded_file:
@@ -603,11 +818,17 @@ def main():
             """)
         st.markdown('</div>', unsafe_allow_html=True)
     
+    # Check if we have data (either uploaded file or sample data)
+    df = None
+    
     if uploaded_file is not None:
         with st.spinner("🔄 Loading and processing data..."):
             df = load_data(uploaded_file)
-        
-        if df is not None:
+    elif 'sample_data' in st.session_state:
+        df = st.session_state['sample_data']
+        st.success("✅ Using sample data for analysis.")
+    
+    if df is not None:
             st.markdown("""
             <div class="success-message">
                 ✅ Data loaded successfully! Ready for analysis.
